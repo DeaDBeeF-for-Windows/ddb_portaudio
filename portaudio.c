@@ -45,7 +45,7 @@
 #define warn(...) {deadbeef->log (__VA_ARGS__);}
 #define info(...) { deadbeef->log_detailed (&plugin.plugin, 1, __VA_ARGS__); }
 
-// This is my 3rd rewrite of portaudio plugin. Hopefully last.
+// This is my 4th rewrite of portaudio plugin. Ok, actually 5th, because idea in 4th rewrite didn't work.
 
 static PaSampleFormat
 pa_GetSampleFormat (int bps, int is_float);
@@ -53,8 +53,8 @@ pa_GetSampleFormat (int bps, int is_float);
 static void
 pa_SetDefault ();
 
-static int
-portaudio_open_stream (void);
+static void
+portaudio_stream_start (void);
 
 static int
 portaudio_free (void);
@@ -94,38 +94,44 @@ static int state;
 static PaStream *stream = 0;
 // we use plugin.fmt as fmt information
 static PaStreamParameters stream_parameters;
-// pointer which tells callback to abort stream
+// stream control
 static struct uData * userData;
-// old userData pointer, tells if stream got aborted
-static struct uData * userDataOld;
-
 // requested stream
 static ddb_waveformat_t requested_fmt;
 
-// previous stream (needs to be closed after stream abort)
-static PaStream *previous_stream = 0;
+#define STREAMS_TO_CLOSE_MAX 10
+#define LOOP_CLOSE 10
+// streams to be closed in callback later
+static PaStream * streams_to_close[STREAMS_TO_CLOSE_MAX] = {NULL, NULL};
+
+
+#define P_UDATA(x) (*((struct uData *) x))
 
 #define STREAM_CONTINUE 0
 #define STREAM_COMPLETE 1
 #define STREAM_ABORT 2
-#define STREAM_SWITCH_WAIT 3
-#define STREAM_FINISHED 4
-#define STREAM_MURDER 5
-
 
 struct uData {
-    int function;
+    // tells callback to finish stream (through STREAM_* definitions)
+    int abort;
+    // 'thread' number which can help with debugging
     int num;
-    PaStream * stream_to_kill;
-    struct uData * stream_to_kill_udata;
+    // loop number
+    int i;
+    // place when other callback kindly asks to wait for him to finish
+    int wait;
+    // stream uData belongs to
+    PaStream *stream;
+    // adds stream to terminate queue
+    unsigned char terminate;
 };
 
 unsigned char num_assign = 0;
 
-// portaudio_open_stream opens a stream using stream_parameters and plugin.fmt information
-static int
-portaudio_open_stream (void) {
-    trace ("portaudio_open_stream\n");
+// portaudio_stream_start opens a stream using stream_parameters and plugin.fmt information
+static void
+portaudio_stream_start (void) {
+    //trace ("portaudio_stream_start\n");
 
     deadbeef->mutex_lock (mutex);
 
@@ -133,11 +139,10 @@ portaudio_open_stream (void) {
     if (stream_parameters.device == -1) {
         stream_parameters.device = Pa_GetDefaultOutputDevice ();
     }
-
-    if (userData)
-        warn ("portaudio_open_stream: WARN: userData is not empty!\n");
-    userData = calloc(1,sizeof(struct uData));
-    userData->num = num_assign++;
+    static struct uData * uData;
+    uData = calloc(1,sizeof(struct uData));
+    uData->num = num_assign++;
+    userData = uData;
 
     // Using paFramesPerBufferUnspecified with alsa gives warnings about underrun
     int buffer_size_config = deadbeef->conf_get_int ("portaudio.buffer", DEFAULT_BUFFER_SIZE);
@@ -147,7 +152,7 @@ portaudio_open_stream (void) {
     else
         buffer_size = buffer_size_config;
 
-    trace ("portaudio_open_stream [%d]: buffer size %lu\n", userData->num, buffer_size);
+    trace ("portaudio_stream_start [%d]: buffer size %lu\n", uData->num, buffer_size);
     /* Open an audio I/O stream. */
     PaError err;
     err = Pa_OpenStream (       &stream,                        // stream pointer
@@ -157,19 +162,53 @@ portaudio_open_stream (void) {
                                 buffer_size,                    // framesPerBuffer
                                 paNoFlag,                       // flags
                                 portaudio_callback,             // callback
-                                userData);                      // userData 
+                                uData);                      // userData 
 
     if (err != paNoError) {
         trace("Failed to open stream. %s\n", Pa_GetErrorText(err));
         deadbeef->mutex_unlock (mutex);
-        return -1;
+        return;
     }
+    uData->stream = stream;
     err = Pa_SetStreamFinishedCallback (stream, pa_stream_finished_callback);
     if (err != paNoError) {
         trace ("Failed to set stream finished callback. %s\n", Pa_GetErrorText(err));
     }
     deadbeef->mutex_unlock (mutex);
-    return 0;
+
+    return;
+}
+
+
+
+static void
+pa_stream_finished_callback (void *uData) {
+    trace ("pa_stream_finished_callback %x\n",uData);
+    if (userData && P_UDATA(uData).abort == STREAM_COMPLETE)
+        userData->wait = 0;
+    if (P_UDATA(uData).terminate) {
+        int i;
+        for (i = 0; i < STREAMS_TO_CLOSE_MAX; i++) {
+            if (i+1 == STREAMS_TO_CLOSE_MAX) {
+                // close oldest stream, move
+                warn ("pa_stream_finished_callback: streams_to_close full. Closing stream no. 0\n");
+                PaError err;
+                err = Pa_CloseStream (streams_to_close[0]);
+                if (err != paNoError) {
+                    trace ("Failed to close stream. %s\n", Pa_GetErrorText(err));
+                }
+                memmove (streams_to_close,streams_to_close+1, STREAMS_TO_CLOSE_MAX-1);
+            }
+            if (streams_to_close[i] != NULL)
+                continue;
+            trace ("settings stream to close on pos %d\n",i);
+            streams_to_close[i++] = P_UDATA(uData).stream;
+            streams_to_close[i] = NULL;
+            break;
+        }
+        free (uData);
+        return;
+    }
 }
 
 static int
@@ -178,15 +217,6 @@ portaudio_init (void) {
     trace ("portaudio_init\n");
     //Pa_Sleep (1000);
     return 0;
-}
-
-static void
-pa_stream_finished_callback (void *uData) {
-    trace ("pa_stream_finished_callback\n");
-    if (userData)
-        trace ("pa_stream_finished_callback: set userdata to STREAM_CONTINUE\n");
-        userData->function = STREAM_CONTINUE;
-    return;
 }
 
 // since we can't change stream parameters, we have to abort actual stream, set values and start streaming again
@@ -214,17 +244,11 @@ portaudio_setformat (ddb_waveformat_t *fmt) {
         );
     }
 
-    // Tell ongoing callback 'thread' to abort stream (if any)
-    // stream will be closed when new 'thread' will open
-
-    // set userdata if necessary and move it to userdata old
+    // Tell ongoing thread to abort stream (if any)
     if (userData) {
-        userData->function = STREAM_COMPLETE;
-        if (userDataOld) {
-            userData->stream_to_kill = previous_stream;
-            userData->stream_to_kill_udata = userDataOld;
-        }
-        userDataOld = userData;
+        trace ("portaudio_setformat: abort [%d]\n",userData->num);
+        userData->abort = STREAM_COMPLETE;
+        userData->terminate = 1;
         userData = 0;
     }
 
@@ -248,17 +272,16 @@ portaudio_setformat (ddb_waveformat_t *fmt) {
 
     // start new stream if was playing
     if (stream){
-        previous_stream = stream;
         stream = 0;
-        portaudio_open_stream ();
-        state = OUTPUT_STATE_PLAYING;
-        userData->function = STREAM_SWITCH_WAIT;
+        portaudio_stream_start ();
         err = Pa_StartStream (stream);
         if (err != paNoError) {
             trace ("Failed to start stream. %s\n", Pa_GetErrorText(err));
             state = OUTPUT_STATE_STOPPED;
             return -1;
         }
+        trace ("portaudio_setformat: Started stream.\n");
+        state = OUTPUT_STATE_PLAYING;
     }
     return 0;
 
@@ -268,7 +291,16 @@ static int
 portaudio_free (void) {
     // called when plugin changes
     trace("portaudio_free\n");
-    portaudio_stop ();
+    if (stream){
+        if (userData)
+            userData->abort = STREAM_ABORT;
+        PaError err;
+        err = Pa_CloseStream (stream);
+        stream = 0;
+        if (err != paNoError) {
+            trace ("Failed to close stream. %s\n", Pa_GetErrorText(err));
+        }
+    }
     return 0;
 }
 
@@ -277,11 +309,11 @@ portaudio_play (void) {
     trace ("portaudio_play\n");
     if (!stream) {
         trace ("portaudio_play: opening stream\n");
-        portaudio_open_stream ();
+        portaudio_stream_start ();
     }
 
     state = OUTPUT_STATE_PLAYING;
-
+    userData->abort = STREAM_CONTINUE;
     if (!Pa_IsStreamActive(stream)){
         PaError err;
         err = Pa_StartStream (stream);
@@ -295,29 +327,15 @@ portaudio_play (void) {
     return 0;
 }
 
+static PaSampleFormat pa_GSFerr () { warn ("portaudio: Sample format wrong? Using Int16.\n"); return 0; }
 static PaSampleFormat
 pa_GetSampleFormat (int bps, int is_float) {
-    switch (bps) {
-    case 8:
-        return paUInt8;
-        break;
-    case 16:
-        return paInt16;
-        break;
-    case 24:
-        return paInt24;
-        break;
-    case 32:
-        if (is_float)
-            return paFloat32;
-        else
-            return paInt32;
-        break;
-    default:
-        trace("portaudio: Sample format wrong? Using Int16.\n");
-        break;
-    };
-    return paInt16;
+    return bps == 8  ? paUInt8   :
+           bps == 16 ? paInt16   :
+           bps == 24 ? paInt24   :
+           bps == 32 && is_float ? paFloat32 :
+           bps == 32 ? paInt32   :
+           pa_GSFerr ();
 }
 
 static int
@@ -328,34 +346,10 @@ portaudio_stop (void) {
     }
     if (stream) {
         PaError err;
-        if (Pa_IsStreamActive(stream)) {
-            err = Pa_AbortStream (stream);
-            if (err != paNoError) {
-                trace("Failed to abort stream. %s\n", Pa_GetErrorText(err))
-                // Try to close through callback
-                userData->function = STREAM_ABORT;
-                trace ("portaudio_stop: aborting stream through callback\n");
-                int i = 0;
-                while (userData->function != STREAM_FINISHED){
-                    usleep (10000);
-                    if (i++ > 50) {
-                        trace ("portaudio_stop: closing failed\n");
-                        state = OUTPUT_STATE_STOPPED;
-                        return -1;
-                    }
-                }
-            }
-            free (userData);
-            userData = 0;
-            
-            trace ("portaudio_stop: closing stream\n");
-            err = Pa_CloseStream (stream);
-            stream = 0;
-            if (err != paNoError) {
-                trace("Failed to close stream. %s\n", Pa_GetErrorText(err))
-                state = OUTPUT_STATE_STOPPED;
-                return -1;
-            }
+        err = Pa_AbortStream (stream);
+        if (err != paNoError) {
+            trace ("Failed to abort stream. %s\n", Pa_GetErrorText(err));
+            return -1;
         }
     }
     state = OUTPUT_STATE_STOPPED;
@@ -471,64 +465,55 @@ static void portaudio_enum_soundcards (void (*callback)(const char *name, const 
 static int
 portaudio_callback (const void *in, void *out, unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo* timeInfo, PaStreamCallbackFlags statusFlags, void *uData ) {
     if (!deadbeef->streamer_ok_to_read (-1)) {
-        trace ("portaudio_callback [%d]: wait\n",((struct uData *) uData)->num);
+        trace ("portaudio_callback [%d]: wait\n",P_UDATA(uData).num);
         usleep (20000);
     }
-    if ( ((struct uData *) uData)->function == STREAM_COMPLETE) {
-        trace ("portaudio_callback [%d]: format changed, aborting stream\n",((struct uData *) uData)->num);
-        ((struct uData *) uData)->function = STREAM_FINISHED;
+    if ( P_UDATA(uData).abort == STREAM_COMPLETE) {
+        if (P_UDATA(uData).terminate) {
+            if (userData)
+                userData->wait = 1;
+            trace ("portaudio_callback [%d]: format changed, slowly aborting stream\n",P_UDATA(uData).num);
+        }
+        else {
+            trace ("portaudio_callback [%d]: slowly aborting stream\n",P_UDATA(uData).num);
+        }
         return paComplete;
-        //return paAbort;
     }
-    else if ( ((struct uData *) uData)->function == STREAM_ABORT) {
-        trace ("portaudio_callback [%d]: aborting\n",((struct uData *) uData)->num);
-        ((struct uData *) uData)->function = STREAM_FINISHED;
-        
+    else if ( P_UDATA(uData).abort == STREAM_ABORT) {
+        trace ("portaudio_callback [%d]: aborting stream\n", P_UDATA(uData).num);
         return paAbort;
     }
-    if (((struct uData *) uData)->function == STREAM_MURDER) {
-        //trace ("portaudio_callback (new): waiting for old stream to finish\n");
-        //int i = 0;
-        /*
-        while (*userDataOld != STREAM_FINISHED){
-            usleep (1000);
-            if (i++ > 1000){
-                trace ("portaudio_callback (new): timeout\n");
+    if (P_UDATA(uData).i == LOOP_CLOSE) {
+        int i;
+        for (i = 0; i < STREAMS_TO_CLOSE_MAX; i++) {
+            if (streams_to_close[i] == NULL)
                 break;
-            }
-        }*/
-        if (previous_stream) {
+            trace ("portaudio_callback [%d]: closing stream no. %d\n", P_UDATA(uData).num, i);
             PaError err;
-            free (userDataOld);
-            userDataOld = 0;
-            trace ("portaudio_callback [%d]: closing old stream\n",((struct uData *) uData)->num);
-            err = Pa_CloseStream (previous_stream);
+            err = Pa_CloseStream (streams_to_close[i]);
             if (err != paNoError) {
-                trace("Failed to close stream. %s\n", Pa_GetErrorText(err))
-                //return -1;
+                trace ("Failed to close stream. %s\n", Pa_GetErrorText(err));
             }
-            previous_stream = 0;
         }
-        ((struct uData *) uData)->function = STREAM_CONTINUE;
+        memset (&streams_to_close,0,STREAMS_TO_CLOSE_MAX*sizeof(PaStream *));
     }
-    if ( ((struct uData *) uData)->function == STREAM_SWITCH_WAIT ) {
-        trace ("portaudio_callback [%d]: switch wait\n",((struct uData *) uData)->num);
+    else if (P_UDATA(uData).i < LOOP_CLOSE) {
+        P_UDATA(uData).i += 1;
+    }
+    if ( P_UDATA(uData).wait) {
+        trace ("portaudio_callback [%d]: wait\n",P_UDATA(uData).num);
         int i = 0;
-        while (((struct uData *) uData)->function == STREAM_SWITCH_WAIT) {
-            usleep (1000);
-            if (((struct uData *) uData)->function == STREAM_CONTINUE)
-                break;
+        while (P_UDATA(uData).wait) {
+            usleep (10);
             if (i++ > 10000){
-                trace ("portaudio_callback [%d]: wait timeout\n",((struct uData *) uData)->num);
+                trace ("portaudio_callback [%d]: wait timeout\n",P_UDATA(uData).num);
                 break;
             }
         }
-        trace ("portaudio_callback [%d]: switch exit after %d loops\n",((struct uData *) uData)->num, i);
-        ((struct uData *) uData)->function = STREAM_MURDER;
+        trace ("portaudio_callback [%d]: wait exit after %d loops\n",P_UDATA(uData).num, i);
     }
-
     if (state != OUTPUT_STATE_PLAYING){
-        trace ("portaudio_callback [%d]: abort\n", ((struct uData *) uData)->num);
+        trace ("portaudio_callback [%d]: abort\n", P_UDATA(uData).num);
         return paAbort;
     }
     deadbeef->streamer_read (out, framesPerBuffer*plugin.fmt.channels*plugin.fmt.bps/8);
