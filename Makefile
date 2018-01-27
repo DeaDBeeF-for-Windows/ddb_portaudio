@@ -13,4 +13,4 @@ all:
 	$(CC) $(CFLAGS) -lportaudio -o portaudio.$(suffix) $(portaudio_sources)
 
 install:
-	cp portaudio.so $installdir
+	cp portaudio.so $(installdir)
