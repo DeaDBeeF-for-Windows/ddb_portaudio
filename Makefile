@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=gnu99 -O0 -g -shared -fPIC -Wall
+CFLAGS = -std=gnu99 -O0 -g -shared -fPIC -Wall -I /usr/local/include
 portaudio_sources = portaudio.c
 installdir = /usr/local/lib/deadbeef
 
@@ -10,7 +10,7 @@ else
 endif
 
 all:
-	$(CC) $(CFLAGS) -lportaudio -o portaudio.$(suffix) $(portaudio_sources)
+	$(CC) $(CFLAGS) -o portaudio.$(suffix) $(portaudio_sources) -lportaudio
 
 install:
 	cp portaudio.so $(installdir)
