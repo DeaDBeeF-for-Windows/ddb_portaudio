@@ -1,4 +1,4 @@
-# deadbeef-portaudio
+# ddb_portaudio
 This plugin allows you to play music in DeaDBeeF through portaudio-2.0 library.
 This library is cross-platform, which means it will play music through some other local library.
 For example on linux, it will play music through alsa or jack.
