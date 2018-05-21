@@ -145,11 +145,12 @@ portaudio_stream_start (void) {
     {
         deadbeef->conf_lock ();
         const char * alsa_soundcard_string = deadbeef->conf_get_str_fast ("alsa_soundcard", "default");
-        deadbeef->conf_unlock ();
         if (strcmp(alsa_soundcard_string, "default") == 0) {
             stream_parameters.device = Pa_GetDefaultOutputDevice ();
+            deadbeef->conf_unlock ();
         }
         else {
+            deadbeef->conf_unlock ();
             stream_parameters.device = deadbeef->conf_get_int ("alsa_soundcard", -1);
         }
     }
@@ -429,11 +430,12 @@ portaudio_configchanged (void) {
     {
         deadbeef->conf_lock ();
         const char * alsa_soundcard_string = deadbeef->conf_get_str_fast ("alsa_soundcard", "default");
-        deadbeef->conf_unlock ();
         if (strcmp(alsa_soundcard_string, "default") == 0) {
             alsa_soundcard = Pa_GetDefaultOutputDevice ();
+            deadbeef->conf_unlock ();
         }
         else {
+            deadbeef->conf_unlock ();
             alsa_soundcard = deadbeef->conf_get_int ("alsa_soundcard", -1);
         }
     }
@@ -442,7 +444,6 @@ portaudio_configchanged (void) {
         trace ("portaudio: config option changed, restarting\n");
         deadbeef->sendmessage (DB_EV_REINIT_SOUND, 0, 0, 0);
     }
-    deadbeef->conf_unlock ();
     return 0;
 }
 
