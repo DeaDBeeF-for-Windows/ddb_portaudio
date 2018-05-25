@@ -416,6 +416,7 @@ portaudio_unpause (void) {
     return portaudio_play ();
 }
 
+/*
 static int portaudio_get_endiannerequested_fmt (void) {
 #if WORDS_BIGENDIAN
     return 1;
@@ -423,6 +424,7 @@ static int portaudio_get_endiannerequested_fmt (void) {
     return 0;
 #endif
 }
+*/
 
 static int
 portaudio_configchanged (void) {
