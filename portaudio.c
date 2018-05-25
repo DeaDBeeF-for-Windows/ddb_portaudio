@@ -623,12 +623,15 @@ static DB_output_t plugin = {
     .plugin.api_vmajor = 1,
     .plugin.api_vminor = 10,
     .plugin.version_major = 1,
-    .plugin.version_minor = 3,
+    .plugin.version_minor = 4,
     .plugin.type = DB_PLUGIN_OUTPUT,
     .plugin.id = "portaudio",
     .plugin.name = "PortAudio output plugin",
     .plugin.descr = "This plugin plays audio using PortAudio library.\n"
     "\n"
+    "Changes in version 1.4:\n"
+    "    * Fix device enumeration when ASCII used.\n"
+    "    * Invalid characters will be discarded.\n"
     "Changes in version 1.3:\n"
     "    * Manual charset selection for device names on Windows.\n"
     "    * Changing device will change output device.\n"
