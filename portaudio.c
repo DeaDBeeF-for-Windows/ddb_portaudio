@@ -466,8 +466,9 @@ static void portaudio_enum_soundcards (void (*callback)(const char *name, const 
         charset = "cp1250";
     else if (devenc_list == 2) {
         charset = malloc (255);
-        if (charset)
-            deadbeef->conf_get_str ("portaudio.devenc_custom", "", charset, 255);
+        if (!charset)
+            return;
+        deadbeef->conf_get_str ("portaudio.devenc_custom", "", charset, 255);
     }
     if (charset)
         trace ("portaudio: converting device names from charset %s\n", charset);
@@ -509,13 +510,14 @@ static void portaudio_enum_soundcards (void (*callback)(const char *name, const 
         if (name_converted_allocated) {
             free (name_converted);
         }
-        if (devenc_list == 2) {
-            free (charset);
-        }
         #endif
         // trace ("device: %s\n",name_converted);
     }
-
+    #ifdef __MINGW32__
+    if (devenc_list == 2 && charset) {
+        free (charset);
+    }
+    #endif
 }
 
 static int
