@@ -1,16 +1,30 @@
-CC = gcc
-CFLAGS = -std=gnu99 -O0 -g -shared -fPIC -Wall -I /usr/local/include
-portaudio_sources = portaudio.c
-installdir = /usr/local/lib/deadbeef
-
+# Makefile for portaudio plugin
 ifeq ($(OS),Windows_NT)
-    suffix = dll
+    SUFFIX = dll
 else
-    suffix = so
+    SUFFIX = so
 endif
 
+CC=gcc
+# CXX=g++
+STD=gnu99
+CFLAGS=-fPIC -I /usr/local/include -Wall
+# CXXFLAGS=-fPIC -I /usr/local/include -Wall
+ifeq ($(DEBUG),1)
+CFLAGS +=-g -O0
+# CXXFLAGS +=-g -O0
+endif
+
+PREFIX=/usr/local/lib/deadbeef
+PLUGNAME=portaudio
+LIBS=-lportaudio
+
 all:
-	$(CC) $(CFLAGS) -o portaudio.$(suffix) $(portaudio_sources) -lportaudio
+	$(CC) -std=$(STD) -c $(CFLAGS) -c $(PLUGNAME).c
+	$(CC) -std=$(STD) -shared $(CXXFLAGS) -o $(PLUGNAME).$(SUFFIX) $(PLUGNAME).o $(LIBS)
 
 install:
-	cp portaudio.so $(installdir)
+	cp $(PLUGNAME).$(SUFFIX) $(PREFIX)
+
+clean:
+	rm -fv $(PLUGNAME).o $(PLUGNAME).$(SUFFIX)
