@@ -662,7 +662,7 @@ static DB_output_t plugin = {
     "\n"
     "3. This notice may not be removed or altered from any source distribution.\n"
     ,
-    .plugin.website = "http://github.com/kuba160",
+    .plugin.website = "http://github.com/kuba160/ddb_portaudio",
     .plugin.start = p_portaudio_start,
     .plugin.stop = p_portaudio_stop,
     .plugin.configdialog = settings_dlg,
